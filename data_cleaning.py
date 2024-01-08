@@ -1,76 +1,71 @@
 import pandas as pd
 from data_extraction import DataExtractor
 from sqlalchemy import create_engine
-from dateutil.parser import parse
-import re
+import numpy as np
+import datetime as dt
 
 # The DataCleaning Class is used to conatin all the methods that will carry out the data cleaning for the data that is extracted 
 
 class DataCleaning:
 
-    """This mehtod is used to clean the data that has been extracted from the RDS for the table named 'Legacy_Users"""
+    """ This Method is used to clean the users data that has been extracted after dropping the index it checks the date_of_birth and join_date column
+    for any uppercase to or alphanumeric characters by applying a lambda function, it the converts the rest of the columns to datetime using the format mixed
+    as some dates are in mixed format and the others to astype"""
 
     def clean_user_data(self, df):
 
         # drop index column
         if "index" in df.columns:
             df = df.drop("index", axis=1)
-
-        """ To clean the date of birth column a lambda function has been created, the lamda function checks for the pattern "YYYY-MM-DD"". It then
-            removes any rows where date of birth is missing or doesn't match the pattern, finally it converts it into a datetime format"""
-
-        df["date_of_birth"] = df["date_of_birth"].apply(lambda x: x if re.match(r"\d{4}-\d{2}-\d{2}", str(x)) else pd.NA)
-        df = df[df["date_of_birth"].notna()]
-        df["date_of_birth"] = pd.to_datetime(df["date_of_birth"])
-
+        
+        df = df[~df['date_of_birth'].apply(lambda x: x.isupper() and x.isalnum())]
+        df = df[~df['join_date'].apply(lambda x: x.isupper() and x.isalnum())]
+        df["date_of_birth"] = pd.to_datetime(df["date_of_birth"], format='mixed')
+        df["join_date"] = pd.to_datetime(df["join_date"], format='mixed')
+        df["country_code"] = df["country_code"].astype("category")
+        df["country"] = df["country"].astype("category")
         """ The same cleaning methods are applied to the join_date column"""
-
-        df["join_date"] = df["join_date"].apply(lambda x: x if re.match(r"\d{4}-\d{2}-\d{2}", str(x)) else pd.NA)
-        df = df[df["join_date"].notna()]
-        df["join_date"] = pd.to_datetime(df["join_date"])
-
         return df
 
     """ This method is used to clean the card data that has been extracted from the pdf"""
 
     def clean_card_data(self, df):
         
-        """ This method drops any rows where the card numbers contain ?"""
-        def drop_rows_with_invalid_card_numbers(df):
-            return df[~df["card_number"].astype(str).str.contains("\?", regex=True)]
+        """ We drop any rows where the card numbers contain ?"""
 
-        """ The above function is applied and reurned as df"""
-        df = drop_rows_with_invalid_card_numbers(df)   
+        df['card_number'] = df['card_number'].astype(str).str.replace("\?", "", regex=True)
+  
+        """Here we are converting to a datetime using a lambda function with the format month/year, if the element is not a string it is left unchanged"""
 
-        """ The same lamda function and changing to datetime functions are used as is in the clean_user_data and clean_card_data methods"""
+        df['expiry_date'] = df['expiry_date'].apply(lambda x: pd.to_datetime(x, errors='coerce', format='%m/%y') if isinstance(x, str) else x)
+        df['date_payment_confirmed'] = df['date_payment_confirmed'].astype("datetime64[as]")
 
-        df["date_payment_confirmed"] = df["date_payment_confirmed"].apply(lambda x: x if re.match(r"\d{4}-\d{2}-\d{2}", str(x)) else pd.NA)
-        df = df[df["date_payment_confirmed"].notna()]
-        df["date_payment_confirmed"] = pd.to_datetime(df["date_payment_confirmed"])
+        df_cleaned = df.dropna()
 
-        return df
-    
+        return df_cleaned
+
     """ This method will clean the data from the data we extracted from API"""
 
     def clean_store_data(self, df):
-        #drop index column
-        if "index" in df.columns:
-            df_cleaned = df.drop("index", axis=1)
 
-        """ We have created a copy of the original to not affect the original dataframe"""
-        cleaned_data = df_cleaned.copy()
+        
+        # Drop the "index" column if it exists and drop the lat column
+        df_cleaned = df.copy() if "index" in df.columns else df
+        df_cleaned = df.drop("lat", axis=1)
 
-        """ We have used pd.to_datetime to convert the data into datetime"""
 
-        cleaned_data['opening_date'] = pd.to_datetime(cleaned_data['opening_date'], errors='coerce')
-        cleaned_data['latitude'] = pd.to_numeric(cleaned_data['latitude'], errors='coerce')
-        cleaned_data['longitude'] = pd.to_numeric(cleaned_data['longitude'], errors='coerce')
-        cleaned_data['lat'] = pd.to_numeric(cleaned_data['lat'], errors='coerce')
-        cleaned_data['staff_numbers'] = pd.to_numeric(cleaned_data['staff_numbers'], errors='coerce')
+        df_cleaned['staff_numbers'] = pd.to_numeric(df_cleaned['staff_numbers'].str.replace(r"[^\d]", "", regex=True), errors='coerce')
 
-        """ Handle missing values """
+        """We are using the same code as in the clean_user_data to check for uppercase and numbers."""
+        df_cleaned = df_cleaned[~df_cleaned['opening_date'].apply(lambda x: x.isupper() and x.isalnum())] 
 
-        cleaned_data = cleaned_data.dropna(subset=['latitude', 'longitude'], how='any')
+        #Convert specific columns to appropriate data types
+        df_cleaned['opening_date'] = pd.to_datetime(df_cleaned['opening_date'], format='mixed')
+        df_cleaned['latitude'] = pd.to_numeric(df_cleaned['latitude'], errors='coerce')
+        df_cleaned['longitude'] = pd.to_numeric(df_cleaned['longitude'], errors='coerce')
+        df_cleaned['staff_numbers'] = pd.to_numeric(df_cleaned['staff_numbers'], errors='coerce')
+
+        cleaned_data = df_cleaned.dropna(subset=['latitude', 'longitude'], how='any')
 
         return cleaned_data
 
@@ -92,13 +87,15 @@ class DataCleaning:
                 return float(value[:-1]) / 1000
             elif value.endswith("ml"):
                 return float(value[:-2]) / 1000
+            elif value.endswith("oz"):
+                return float(value[:-2]) / 35.27396 
 
         # Drop any rows with missing value
         df.dropna(inplace=True)
 
-        """Here we are going through each row where the column ends in 'kg', 'g' or 'ml' and apply the convert_units method"""
+        """Here we are going through each row where the column ends in 'kg', 'g', 'ml' or 'oz' and apply the convert_units method"""
 
-        df = df[df["weight"].str.endswith(("kg","g","ml"))]
+        df = df[df["weight"].str.endswith(("kg","g","ml","oz"))]
         df["weight"] = df["weight"].apply(convert_units)
         df_cleaned = df.drop(columns=['Unnamed: 0'], errors='ignore')
 
@@ -108,6 +105,7 @@ class DataCleaning:
         df_cleaned.index = df_cleaned["product_name"]
 
         print(df_cleaned)
+        return df_cleaned
 
     """ This method cleans all the data that is extracted from the orders_table which is in the RDS"""
 
@@ -124,18 +122,21 @@ class DataCleaning:
     
     """ This method is used to clean the data that was extracted from the JSON file"""
 
+    
+
     def clean_date_events(self, df_events):
-        
-        """ The columns in the dataframe have had their datatypes changed, some have been changed to numerics and the others to datetime depending on the 
-            row name and type of data in the dataframe."""
-        df_events['timestamp'] = pd.to_datetime(df_events['timestamp'], errors='coerce')
-        df_events['month'] = pd.to_datetime(df_events['month'], format='%B', errors='coerce').dt.month
+
+        """Cleans and transforms date-related columns in the DataFrame, including UUID validation."""
+
+        df_events['timestamp'] = pd.to_datetime(df_events['timestamp'], errors='coerce').dt.time
+        df_events['month'] = pd.to_numeric(df_events['month'], errors='coerce')
         df_events['year'] = pd.to_numeric(df_events['year'], errors='coerce')
         df_events['day'] = pd.to_numeric(df_events['day'], errors='coerce')
-        df_events['time_period'] = pd.to_datetime(df_events['time_period'], format='%H:%M:%S', errors='coerce').dt.time
-        df_events['date_uuid'] = pd.to_datetime(df_events['date_uuid'], errors='coerce')
+        df_events['time_period'] = df_events['time_period'].str.upper().where(~df_events['time_period'].str.isupper(), np.nan)
+        
+        required_characters = 36
 
-       """ This is to drop any rows that do not contain any timestamo values"""
-        df_events = df_events.dropna(subset=['timestamp'])
+        df_events['date_uuid'] = np.where(df_events['date_uuid'].str.len() < required_characters, np.nan, df_events['date_uuid'])
+        df_events = df_events.dropna(subset=['date_uuid'])
 
         return df_events

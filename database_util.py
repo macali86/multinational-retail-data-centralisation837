@@ -38,5 +38,4 @@ class DatabaseConnector:
 
     def upload_to_db(self, df, table_name):
         engine_postgres = self.connect_to_db()
-
         df.to_sql(table_name, engine_postgres, index=False, if_exists='replace')

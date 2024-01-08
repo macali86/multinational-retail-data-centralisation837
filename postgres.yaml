@@ -1,5 +1,0 @@
-SERVER: localhost
-PASSWORD: HayahAmaalShezzy
-USER: postgres
-DATABASE: sales_data
-PORT: 5432
